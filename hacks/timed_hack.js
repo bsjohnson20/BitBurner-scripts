@@ -1,3 +1,4 @@
+/// <reference path="NetscriptDefinitions.d.ts" />
 let floor = Math.floor;
 
 /** @param {NS} ns */
@@ -16,6 +17,7 @@ export async function main(ns) {
   let sDelay = ns.args[3];
   let method = ns.args[4];
   //await ns.sleep(sDelay); // wait to offset scripts
+
 
   let longest = timingDict['weaken'];
 
@@ -73,16 +75,20 @@ export async function main(ns) {
   if (method == "grow") { hThreads = 0 };
 
 
+  let hackArgs = JSON.stringify({ target: target, init_sleep: hackDelay, post_sleep: hackOffsetDelay, loop: true });
+  let growArgs = JSON.stringify({ target: target, init_sleep: growDelay, post_sleep: growOffsetDelay, loop: true });
+  let weakenArgs = JSON.stringify({ target: target, init_sleep: weakenDelay, post_sleep: 0, loop: true });
+
   try {
-    ns.exec("/hacks/hack.js", host, hThreads, target, hackDelay, hackOffsetDelay);
+    ns.exec("/hacks/hack.js", host, hThreads, hackArgs);
   }
   catch (e) { };
   try {
-    ns.exec("/hacks/grow.js", host, gThreads, target, growDelay, growOffsetDelay);
+    ns.exec("/hacks/grow.js", host, gThreads, growArgs);
   }
   catch (e) { };
   try {
-    ns.exec("/hacks/weaken.js", host, wThreads, target, weakenDelay);
+    ns.exec("/hacks/weaken.js", host, wThreads, weakenArgs);
   }
   catch (e) { }
 }

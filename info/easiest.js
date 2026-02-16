@@ -1,57 +1,61 @@
 /** @param {NS} ns */
-import {scan} from "utils/getallservers.ts"
+/* The line `import {scan} from "utils/getallservers.ts"` is importing the `scan` function from the
+file `getallservers.ts` located in the `utils` directory. This allows the current script to use the
+`scan` function defined in that file. */
+import { scan } from "utils/getallservers.ts"
 let moneyMin = 100;
 
 function fmtTime(sec) {
-    sec = Math.floor(sec/1000);
+  sec = Math.floor(sec / 1000);
 
-    const h = Math.floor(sec / 3600);
-    sec %= 3600;
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
+  const h = Math.floor(sec / 3600);
+  sec %= 3600;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
 
-    let out = "";
-    if (h) out += h + "hr";
-    if (m) out += m + "m";
-    if (s || out === "") out += s + "s";
+  let out = "";
+  if (h) out += h + "hr";
+  if (m) out += m + "m";
+  if (s || out === "") out += s + "s";
 
-    return out;
+  return out;
 }
 
 function fmtTimeShort(sec) {
-    sec = Math.floor(sec/1000);
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
+  sec = Math.floor(sec / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
 
-    if (h && m) return `${h}hr${m}m`;
-    if (h) return `${h}hr`;
-    if (m) return `${m}m`;
-    return `${sec}s`;
+  if (h && m) return `${h}hr${m}m`;
+  if (h) return `${h}hr`;
+  if (m) return `${m}m`;
+  return `${sec}s`;
 }
 
-function sorting(servers, type="growth"){
+function sorting(servers) {
   let analysis2 = []
-  for (let i = 0; i < servers.length; i++){
-    if (servers[i][0].moneyMax > moneyMin){
+  for (let i = 0; i < servers.length; i++) {
+    if (servers[i][0].moneyMax > moneyMin) {
       analysis2.push(servers[i])
     }
   }
-  servers = analysis2; 
-  switch (type){
-    case "growth":
-      return servers.sort((a, b) => a[0].serverGrowth - b[0].serverGrowth);
-      break;
-    case "weaktime":
-      return servers.sort((a, b) => a[1] - b[1]);  // weaken time
-      break;
-  }
+  servers = analysis2;
+  return servers.sort((a, b) => a[1] - b[1]);  // weaken time
+  // switch (type) {
+  //   case "growth":
+  //     return servers.sort((a, b) => a[0].serverGrowth - b[0].serverGrowth);
+  //     break;
+  //   case "weaktime":
+  //     return servers.sort((a, b) => a[1] - b[1]);  // weaken time
+  //     break;
+  // }
 }
 
 /** @param {NS} ns */
-function getAnalysis(ns, servers){
+function getAnalysis(ns, servers) {
   let analysis = [];
-  for (let i = 0; i < servers.length; i++){
-    if (servers[i].includes("pServ")){continue};
+  for (let i = 0; i < servers.length; i++) {
+    if (servers[i].includes("pServ")) { continue };
     let hackTime = ns.getHackTime(servers[i]);
     let weakTime = ns.getWeakenTime(servers[i]);
     let growTime = ns.getGrowTime(servers[i]);
@@ -64,15 +68,15 @@ function getAnalysis(ns, servers){
 
 /** @param {NS} ns */
 export async function main(ns) {
-  let type = await ns.prompt("Sorting var: ", {type: "select", "choices": ['growth','weaktime']})
-  moneyMin = await ns.prompt("MinMonCap: ", {type: "text"})
-  if (type == ""){ns.tprint("Missing inputs"); return;}
+  // let type = await ns.prompt("Sorting var: ", { type: "select", "choices": ['growth', 'weaktime'] })
+  moneyMin = await ns.prompt("MinMonCap: ", { type: "text" })
+  // if (type == "") { ns.tprint("Missing inputs"); return; }
 
 
   let servers = scan(ns, "home");
   let sAnalysis = getAnalysis(ns, servers) // unsorted
-  sAnalysis = sorting(sAnalysis, type); // sorted
-  for (let i = 0; i < sAnalysis.length; i++){
+  sAnalysis = sorting(sAnalysis); // sorted
+  for (let i = 0; i < sAnalysis.length; i++) {
     const row = "%-20s %4s %3d/%d/%d %6s %4s %4s";
     let s = sAnalysis[i];
     ns.tprintf(
@@ -82,12 +86,12 @@ export async function main(ns) {
       s[0].requiredHackingSkill,
       s[0].hackDifficulty,
       s[0].minDifficulty,
-      ns.formatNumber(sAnalysis[i][0].moneyMax,0),
+      ns.formatNumber(sAnalysis[i][0].moneyMax, 0),
       s[0].hasAdminRights ? "Y" : "N",
       fmtTimeShort(s[1])
     );
 
     //ns.tprint(sAnalysis[i][0].hostname, ". Growth: ", sAnalysis[i][0].serverGrowth, ". HackLevel: ", sAnalysis[i][0].minDifficulty, ". MonMax: ", ns.formatNumber(sAnalysis[i][0].moneyMax));
   }
-    ns.tprintf("hostname serverGrowth minDifficulty MonMax ROOT")
+  ns.tprintf("hostname serverGrowth minDifficulty MonMax ROOT")
 }
