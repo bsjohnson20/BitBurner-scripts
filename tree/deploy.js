@@ -28,10 +28,30 @@ function calcRam(ns, H, G, W) {
   return ns.getScriptRam("/hacks/hack.js") * H + ns.getScriptRam("/hacks/weaken.js") * W + ns.getScriptRam("/hacks/grow.js") * G
 }
 
-function calcHGW(ns, server, frac) {
-  let H = ns.hackAnalyzeThreads(server.hostname, server.moneyMax * frac);
-  let G = ns.growthAnalyze(server.hostname, 1 / (1 - frac));
-  let W = (H * 0.002 + G * 0.004) / 0.05;
+// function calcHGW(ns, server, frac) {
+//   let H = ns.hackAnalyzeThreads(server.hostname, server.moneyMax * frac);
+//   let G = ns.growthAnalyze(server.hostname, 1 / (1 - frac));
+//   let W = (H * 0.002 + G * 0.004) / 0.05;
+//   return { "h": H, "g": G, "w": W };
+// }
+
+function calcHGW(ns, server, targetFrac) {
+  const secDiff = server.hackDifficulty - server.minDifficulty;
+
+  // If security is more than 3 points above min, 
+  // we go into "Recovery Mode" by slashing the hack amount.
+  let effectiveFrac = secDiff > 5 ? 0.01 : targetFrac;
+
+  let H = ns.hackAnalyzeThreads(server.hostname, server.moneyMax * effectiveFrac);
+  // Ensure H is at least 0 if effectiveFrac is tiny
+  H = Math.max(0, H);
+
+  let G = ns.growthAnalyze(server.hostname, 1 / (1 - effectiveFrac));
+
+  // Increase Weaken threads if security is high to "over-compensate"
+  let securityPadding = secDiff > 5 ? 2.0 : 1.0;
+  let W = ((H * 0.002 + G * 0.004) / 0.05) * securityPadding;
+
   return { "h": H, "g": G, "w": W };
 }
 
@@ -42,7 +62,7 @@ async function execute(ns, server, threads, target, hacking = false, multiplier 
   const gThreads = Math.floor(threads["G"] || 0);
   const wThreads = Math.floor(threads["W"] || 0);
 
-  if (gThreads <= 0 || wThreads <= 0) return;
+  // if (gThreads <= 0 || wThreads <= 0) return;
 
   const hackTime = ns.getHackTime(target);
   const growTime = ns.getGrowTime(target);
@@ -51,6 +71,7 @@ async function execute(ns, server, threads, target, hacking = false, multiplier 
   // 20ms-50ms is the sweet spot for batch uniformity
   const spacer = 30;
   const noloop = false;
+  global_delay += 200;
 
   await ns.scp(["/hacks/hack.js", "/hacks/grow.js", "/hacks/weaken.js"], server.hostname, "home");
 
@@ -64,9 +85,10 @@ async function execute(ns, server, threads, target, hacking = false, multiplier 
     const wDelay = batchOffset;
 
     // Construct the mandated JSON strings
-    let hackArgs = JSON.stringify({ target: target, init_sleep: hDelay, post_sleep: 0, loop: noloop });
-    let growArgs = JSON.stringify({ target: target, init_sleep: gDelay, post_sleep: 0, loop: noloop });
-    let weakenArgs = JSON.stringify({ target: target, init_sleep: wDelay, post_sleep: 0, loop: noloop });
+    let hackArgs = JSON.stringify({ target: target, init_sleep: hDelay + global_delay, post_sleep: 0, loop: noloop });
+    let growArgs = JSON.stringify({ target: target, init_sleep: gDelay + global_delay, post_sleep: 0, loop: noloop });
+    let weakenArgs = JSON.stringify({ target: target, init_sleep: wDelay + global_delay, post_sleep: 0, loop: noloop });
+
 
     if (hacking && hThreads > 0) {
       ns.exec("/hacks/hack.js", server.hostname, hThreads, hackArgs);
@@ -80,7 +102,14 @@ import { scan } from "utils/getallservers.ts"
 
 /** @param {NS} ns */
 export async function main(ns) {
+  ns.disableLog("disableLog");
+  ns.disableLog("exec");
+  ns.disableLog("scp");
+  ns.disableLog("scan");
+
   let servers = scan(ns)
+
+  global_delay = 0;
 
   // Calculates HGW against target server (e.g. n00dles)
   let target = ns.read("/config/target.txt");
@@ -94,6 +123,7 @@ export async function main(ns) {
     "W": Math.floor(threads.w) / 2
   }
   let hacking = true;
+  let skipped = 0;
   while (1 == 1) {
     targetServer = ns.getServer(target)
     hacking = true;
@@ -106,38 +136,52 @@ export async function main(ns) {
     }
 
     for (let i = 0; i < servers.length; i++) {
-      // ns.print("Processing server: ", servers[i])
       const element = ns.getServer(servers[i]);
-      // thread multiplier
-      let ram = calcRam(ns, minThreads.H, minThreads.G, minThreads.W)
-      let threadMult = Math.floor(element.maxRam / ram);
-      // ns.printf("Server: %s, Thread Mult: %d, Max Ram: %d, Ram per script: %d", element.hostname, threadMult, element.maxRam, ram)
-      // loop over HGW and multiply
-      threads = {
-        "H": Math.floor(minThreads.H),
-        "G": Math.floor(minThreads.G),
-        "W": Math.floor(minThreads.W)
-      };
+      if (element.maxRam <= 0) continue; // Skip servers with no RAM
 
-      // print debugging for threads ram etc
-      // ns.printf("Server: %s, Thread Mult: %d, Max Ram: %d, Ram per script: %d, Threads: H=%d, G=%d, W=%d. Init threads: H=%d G=%d, W=%d", element.hostname, threadMult, element.maxRam, ram, threads.H, threads.G, threads.W, minThreads.H, minThreads.G, minThreads.W)
+      // 1. Start with your ideal thread counts
+      let h = Math.floor(minThreads.H);
+      let g = Math.floor(minThreads.G);
+      let w = Math.floor(minThreads.W);
 
-      if (threads.H < 1 && threads.G < 1 && threads.W < 1) {
-        // ns.printf("Zero threads: %s, HGW: %s", element.hostname, JSON.stringify(threads));
+      // 2. Shrink the base ratio until it fits at least once
+      // We use a while loop to reduce the threads proportionally 
+      // until the total cost is <= the server's maximum RAM.
+      while (calcRam(ns, h, g, w) > element.maxRam && (h > 0 || g > 1 || w > 1)) {
+        if (h > 0) h--;
+        if (g > 1) g--;
+        if (w > 1) w--;
+      }
+
+      let ramPerUnit = calcRam(ns, h, g, w);
+
+      // 3. Calculate how many times this (now smaller) unit fits
+      let threadMult = ramPerUnit > 0 ? Math.floor(element.maxRam / ramPerUnit) : 0;
+
+      let finalThreads = { "H": h, "G": g, "W": w };
+
+      if (threadMult < 1 || (h < 1 && g < 1 && w < 1)) {
+        skipped += 1;
         continue;
       }
-      ns.disableLog("disableLog");
-      ns.disableLog("exec");
-      ns.disableLog("scp");
-      ns.disableLog("scan");
-      await execute(ns, element, threads, target, hacking, threadMult)
 
+      // 4. Pass the scaled threads and the multiplier to execute
+      await execute(ns, element, finalThreads, target, hacking, threadMult);
     }
+
     const minSleep = 1000;
     let minWeakenTime = ns.getWeakenTime(target);
-
+    // get current timestamp and weaken time then write serialised
+    const timestamp = Date.now();
+    const data = {
+      timestamp: timestamp,
+      weakenTime: minWeakenTime
+    };
+    ns.writePort(69, JSON.stringify(data)); // update port
+    ns.printf("Skipped servers: %d", skipped);
     await ns.sleep(minSleep + minWeakenTime);
     global_delay = 0;
+    skipped = 0;
   }
 
 }
