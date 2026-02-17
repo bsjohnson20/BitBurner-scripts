@@ -47,20 +47,12 @@ export async function main(ns) {
             values.push(`${ns.formatNumber(targetServer.hackDifficulty)}/${ns.formatNumber(targetServer.minDifficulty)}`);
 
             // read next weaken from 69 port and update remaining
-            let portData = ns.readPort(69);
-            let now = Date.now();
+            let remaining = calculateRemainingTime(ns);
 
-            // 2. Only update if the port actually has data
-            if (portData !== "NULL PORT" && portData !== "") {
-                try {
-                    cachedData = JSON.parse(portData);
-                } catch (err) {
-                    // If parse fails, we just keep using cachedData as-is
-                }
-            }
-
-            // 3. Calculate remaining based on the last known good data
-            let remaining = Math.max(0, cachedData.timestamp + cachedData.weakenTime - now);
+            // get total server RAM
+            let totalRam = calculateTotalRam(ns);
+            headers.push("Total RAM");
+            values.push(`${totalRam} GB`);
 
             // UI Logic
             headers.push("wTime");
@@ -75,4 +67,31 @@ export async function main(ns) {
         }
         await ns.sleep(1000);
     }
+}
+
+function calculateTotalRam(ns) {
+    let totalRam = 0;
+    const pServers = ns.getPurchasedServers();
+    for (const server of pServers) {
+        totalRam += ns.getServerMaxRam(server);
+    }
+    return totalRam;
+}
+
+function calculateRemainingTime(ns) {
+    let portData = ns.readPort(69);
+    let now = Date.now();
+
+    // 2. Only update if the port actually has data
+    if (portData !== "NULL PORT" && portData !== "") {
+        try {
+            cachedData = JSON.parse(portData);
+        } catch (err) {
+            // If parse fails, we just keep using cachedData as-is
+        }
+    }
+
+    // 3. Calculate remaining based on the last known good data
+    let remaining = Math.max(0, cachedData.timestamp + cachedData.weakenTime - now);
+    return remaining;
 }

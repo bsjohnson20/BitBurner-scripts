@@ -1,187 +1,148 @@
-let global_delay = 0
+import { scan } from "utils/getallservers.ts";
 
-function gcd(a, b) {
-  return b === 0 ? a : gcd(b, a % b);
-}
+const HACK_PATH = "/hacks/hack.js";
+const GROW_PATH = "/hacks/grow.js";
+const WEAKEN_PATH = "/hacks/weaken.js";
+const SPACER = 30;
+const PORT_ID = 69;
 
-function gcd3(a, b, c) {
-  return gcd(gcd(a, b), c);
-}
-
-function simplifyRatio(H, G, W) {
-  H = Math.round(H);
-  G = Math.round(G);
-  W = Math.round(W);
-
-  const d = gcd3(H, G, W);
-  return [H / d, G / d, W / d];
-}
-
-/** @param {NS} ns */
-function calcRatioRam(ns, totRam, target, threads) {
-  let ratio = ns.getServerMaxRam(target) / totRam;
-  return { "H": threads["H"] * ratio, "W": threads["W"] * ratio, "G": threads["G"] * ratio }
-}
-
-/** @param {NS} ns */
-function calcRam(ns, H, G, W) {
-  return ns.getScriptRam("/hacks/hack.js") * H + ns.getScriptRam("/hacks/weaken.js") * W + ns.getScriptRam("/hacks/grow.js") * G
-}
-
-// function calcHGW(ns, server, frac) {
-//   let H = ns.hackAnalyzeThreads(server.hostname, server.moneyMax * frac);
-//   let G = ns.growthAnalyze(server.hostname, 1 / (1 - frac));
-//   let W = (H * 0.002 + G * 0.004) / 0.05;
-//   return { "h": H, "g": G, "w": W };
-// }
-
-function calcHGW(ns, server, targetFrac) {
-  const secDiff = server.hackDifficulty - server.minDifficulty;
-
-  // If security is more than 3 points above min, 
-  // we go into "Recovery Mode" by slashing the hack amount.
-  let effectiveFrac = secDiff > 5 ? 0.01 : targetFrac;
-
-  let H = ns.hackAnalyzeThreads(server.hostname, server.moneyMax * effectiveFrac);
-  // Ensure H is at least 0 if effectiveFrac is tiny
-  H = Math.max(0, H);
-
-  let G = ns.growthAnalyze(server.hostname, 1 / (1 - effectiveFrac));
-
-  // Increase Weaken threads if security is high to "over-compensate"
-  let securityPadding = secDiff > 5 ? 2.0 : 1.0;
-  let W = ((H * 0.002 + G * 0.004) / 0.05) * securityPadding;
-
-  return { "h": H, "g": G, "w": W };
-}
-
-
-/** @param {NS} ns */
-async function execute(ns, server, threads, target, hacking = false, multiplier = 1) {
-  const hThreads = Math.floor(threads["H"] || 0);
-  const gThreads = Math.floor(threads["G"] || 0);
-  const wThreads = Math.floor(threads["W"] || 0);
-
-  // if (gThreads <= 0 || wThreads <= 0) return;
-
-  const hackTime = ns.getHackTime(target);
-  const growTime = ns.getGrowTime(target);
-  const weakenTime = ns.getWeakenTime(target);
-
-  // 20ms-50ms is the sweet spot for batch uniformity
-  const spacer = 30;
-  const noloop = false;
-  global_delay += 200;
-
-  await ns.scp(["/hacks/hack.js", "/hacks/grow.js", "/hacks/weaken.js"], server.hostname, "home");
-
-  for (let i = 0; i < multiplier; i++) {
-    // Each batch is offset so they land in a clean sequence
-    const batchOffset = i * (spacer * 4);
-
-    // Calculate delays relative to the Weaken landing at the end
-    const hDelay = weakenTime - hackTime - (spacer * 2) + batchOffset;
-    const gDelay = weakenTime - growTime - spacer + batchOffset;
-    const wDelay = batchOffset;
-
-    // Construct the mandated JSON strings
-    let hackArgs = JSON.stringify({ target: target, init_sleep: hDelay + global_delay, post_sleep: 0, loop: noloop });
-    let growArgs = JSON.stringify({ target: target, init_sleep: gDelay + global_delay, post_sleep: 0, loop: noloop });
-    let weakenArgs = JSON.stringify({ target: target, init_sleep: wDelay + global_delay, post_sleep: 0, loop: noloop });
-
-
-    if (hacking && hThreads > 0) {
-      ns.exec("/hacks/hack.js", server.hostname, hThreads, hackArgs);
-    }
-    ns.exec("/hacks/grow.js", server.hostname, gThreads, growArgs);
-    ns.exec("/hacks/weaken.js", server.hostname, wThreads, weakenArgs);
+function hackit(ns, target) {
+  if (target.includes("pServer")) {
+    return true
   }
-}
+  let min_ports = 1;
+  //if (ns.fileExists("NUKE.exe", "home")){ min_ports+=1; ns.brutessh(target)};
+  if (ns.fileExists("FTPCrack.exe", "home")) { min_ports += 1; ns.ftpcrack(target) };
+  if (ns.fileExists("relaySMTP.exe", "home")) { min_ports += 1; ns.relaysmtp(target) };
+  if (ns.fileExists("BruteSSH.exe", "home")) { min_ports += 1; ns.brutessh(target) };
+  if (ns.fileExists("SQLInject.exe", "home")) { min_ports += 1; ns.sqlinject(target) };
 
-import { scan } from "utils/getallservers.ts"
+  if (min_ports <= ns.getServerNumPortsRequired(target)) {
+    return false // ns.tprint("Hacked: ", target)
+  }
+  ns.nuke(target);
+  return true
+}
 
 /** @param {NS} ns */
 export async function main(ns) {
-  ns.disableLog("disableLog");
-  ns.disableLog("exec");
-  ns.disableLog("scp");
-  ns.disableLog("scan");
+  ns.disableLog("ALL");
 
-  let servers = scan(ns)
+  while (true) {
 
-  global_delay = 0;
-
-  // Calculates HGW against target server (e.g. n00dles)
-  let target = ns.read("/config/target.txt");
-  let targetServer = ns.getServer(target)
-  let threads = calcHGW(ns, targetServer, 0.5)
-
-  // Loop over and calc
-  let minThreads = {
-    "H": Math.floor(threads.h) * 2,
-    "G": Math.floor(threads.g) * 2,
-    "W": Math.floor(threads.w) / 2
-  }
-  let hacking = true;
-  let skipped = 0;
-  while (1 == 1) {
-    targetServer = ns.getServer(target)
-    hacking = true;
-    // Check if money at max
-    if (targetServer.moneyAvailable < targetServer.moneyMax) { // if less then don't hack
-      hacking = false;
-      ns.printf("Server %s is not at max money. Skipping hack. cur/max %s/%s", targetServer.hostname, ns.formatNumber(targetServer.moneyAvailable), ns.formatNumber(targetServer.moneyMax));
-    } else {
-      ns.printf("S: %s. Mon/Max %s/%s", targetServer.hostname, ns.formatNumber(targetServer.moneyAvailable), ns.formatNumber(targetServer.moneyMax));
+    // Hack all servers
+    for (const server of scan(ns)) {
+      hackit(ns, server);
     }
 
-    for (let i = 0; i < servers.length; i++) {
-      const element = ns.getServer(servers[i]);
-      if (element.maxRam <= 0) continue; // Skip servers with no RAM
+    const target = ns.read("/config/target.txt").trim();
+    const allServers = scan(ns).filter(s => s !== "home" && ns.hasRootAccess(s));
+    const targetServer = ns.getServer(target);
+    const isHacking = targetServer.moneyAvailable >= (targetServer.moneyMax * 0.90);
 
-      // 1. Start with your ideal thread counts
-      let h = Math.floor(minThreads.H);
-      let g = Math.floor(minThreads.G);
-      let w = Math.floor(minThreads.W);
+    // 1. Get Ideal thread counts
+    const ideal = getIdealThreads(ns, target, 0.5);
+    let deployedCount = 0;
 
-      // 2. Shrink the base ratio until it fits at least once
-      // We use a while loop to reduce the threads proportionally 
-      // until the total cost is <= the server's maximum RAM.
-      while (calcRam(ns, h, g, w) > element.maxRam && (h > 0 || g > 1 || w > 1)) {
-        if (h > 0) h--;
-        if (g > 1) g--;
-        if (w > 1) w--;
+    for (const hostName of allServers) {
+      const server = ns.getServer(hostName);
+      if (server.maxRam <= 0) continue;
+
+      // 2. Scale batch to fit host
+      const batch = fitToHost(ns, hostName, ideal, isHacking);
+
+      // 3. Deployment check (Must have at least one thread to try)
+      if (batch.H > 0 || batch.G > 0 || batch.W > 0) {
+        await ns.scp([HACK_PATH, GROW_PATH, WEAKEN_PATH], hostName, "home");
+
+        const success = deploy(ns, hostName, target, batch, isHacking, deployedCount * 200);
+        if (success) deployedCount++;
       }
-
-      let ramPerUnit = calcRam(ns, h, g, w);
-
-      // 3. Calculate how many times this (now smaller) unit fits
-      let threadMult = ramPerUnit > 0 ? Math.floor(element.maxRam / ramPerUnit) : 0;
-
-      let finalThreads = { "H": h, "G": g, "W": w };
-
-      if (threadMult < 1 || (h < 1 && g < 1 && w < 1)) {
-        skipped += 1;
-        continue;
-      }
-
-      // 4. Pass the scaled threads and the multiplier to execute
-      await execute(ns, element, finalThreads, target, hacking, threadMult);
     }
 
-    const minSleep = 1000;
-    let minWeakenTime = ns.getWeakenTime(target);
-    // get current timestamp and weaken time then write serialised
-    const timestamp = Date.now();
-    const data = {
-      timestamp: timestamp,
+    // --- PORT DATA UPDATE ---
+    const minWeakenTime = ns.getWeakenTime(target);
+    const portData = {
+      timestamp: Date.now(),
       weakenTime: minWeakenTime
     };
-    ns.writePort(69, JSON.stringify(data)); // update port
-    ns.printf("Skipped servers: %d", skipped);
-    await ns.sleep(minSleep + minWeakenTime);
-    global_delay = 0;
-    skipped = 0;
+    ns.writePort(PORT_ID, JSON.stringify(portData));
+
+    ns.print(`Cycle complete. Deployed to ${deployedCount} servers.`);
+
+    // Wait for the full cycle duration before recalculating
+    await ns.sleep(minWeakenTime + 1000);
+  }
+}
+
+function getIdealThreads(ns, target, frac) {
+  let H = Math.max(1, ns.hackAnalyzeThreads(target, ns.getServerMaxMoney(target) * frac));
+  let G = Math.max(1, ns.growthAnalyze(target, 1 / (1 - frac)));
+  let W = Math.max(1, (H * 0.002 + G * 0.004) / 0.05);
+  return { H, G, W };
+}
+
+/** * Refined Scaling: Prioritizes Weaken over Grow to prevent 
+ * security lock-outs on small servers.
+ */
+function fitToHost(ns, host, ideal, isHacking) {
+  const ramMax = ns.getServerMaxRam(host);
+  const ramUsed = ns.getServerUsedRam(host);
+  const ramAvail = ramMax - ramUsed;
+
+  const hRam = ns.getScriptRam(HACK_PATH);
+  const gRam = ns.getScriptRam(GROW_PATH);
+  const wRam = ns.getScriptRam(WEAKEN_PATH);
+
+  // 1. Calculate the "Unit" cost
+  const hCost = isHacking ? ideal.H * hRam : 0;
+  const unitCost = hCost + (ideal.G * gRam) + (ideal.W * wRam);
+
+  if (unitCost === 0 || ramAvail < wRam) return { H: 0, G: 0, W: 0 };
+
+  // 2. Initial Scaling
+  let scale = Math.min(1, ramAvail / unitCost);
+
+  let H = isHacking ? Math.floor(ideal.H * scale) : 0;
+  let G = Math.floor(ideal.G * scale);
+  let W = Math.floor(ideal.W * scale);
+
+  // 3. ENFORCEMENT: If we are growing/hacking, we MUST weaken.
+  // If the server has at least (wRam + gRam), ensure W is at least 1.
+  if (ramAvail >= (wRam + gRam)) {
+    if (W === 0) {
+      W = 1;
+      // Reduce G to make room if necessary
+      while ((H * hRam + G * gRam + W * wRam) > ramAvail && G > 1) {
+        G--;
+      }
+    }
   }
 
+  return { H, G, W };
+}
+
+function deploy(ns, host, target, threads, isHacking, delay) {
+  const hTime = ns.getHackTime(target);
+  const gTime = ns.getGrowTime(target);
+  const wTime = ns.getWeakenTime(target);
+
+  const hDelay = wTime - hTime - (SPACER * 2) + delay;
+  const gDelay = wTime - gTime - SPACER + delay;
+  const wDelay = delay;
+
+  const makeArgs = (init) => JSON.stringify({
+    target: target,
+    init_sleep: Math.max(0, init),
+    post_sleep: 0,
+    loop: false
+  });
+
+  let success = false;
+  // If any script successfully starts, we consider it a successful deployment
+  if (threads.W > 0 && ns.exec(WEAKEN_PATH, host, threads.W, makeArgs(wDelay)) > 0) success = true;
+  if (threads.G > 0 && ns.exec(GROW_PATH, host, threads.G, makeArgs(gDelay)) > 0) success = true;
+  if (isHacking && threads.H > 0 && ns.exec(HACK_PATH, host, threads.H, makeArgs(hDelay)) > 0) success = true;
+
+  return success;
 }
